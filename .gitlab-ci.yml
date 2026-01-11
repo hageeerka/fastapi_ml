@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "fastapi-ml-skeleton:local"
-        KUBECONFIG = "/home/jenkins/.kube/config"
+        DOCKER_IMAGE = "fastapi-ml-skeleton:${BUILD_NUMBER}"
+        DOCKER_LATEST = "fastapi-ml-skeleton:latest"
         NAMESPACE = "leadscore"
         CHART_PATH = "./helm/fastapi-ml"
     }
@@ -13,7 +13,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Building Docker image..."
-                    docker build -t ${DOCKER_IMAGE} .
+                    docker build -t ${DOCKER_IMAGE} -t ${DOCKER_LATEST} .
                     docker images | grep fastapi
                 '''
             }
@@ -35,7 +35,7 @@ pipeline {
                     echo "Deploying with Helm..."
                     helm upgrade --install fastapi-ml ${CHART_PATH} \
                         -n ${NAMESPACE} \
-                        --create-namespace \
+                        --set image.tag=${BUILD_NUMBER} \
                         --wait \
                         --timeout 5m
                 '''
@@ -48,29 +48,25 @@ pipeline {
                     echo "Waiting for deployment..."
                     kubectl -n ${NAMESPACE} rollout status deployment/fastapi-ml --timeout=5m
                     
-                    echo "Pod status:"
+                    echo "Pods:"
                     kubectl -n ${NAMESPACE} get pods
                     
-                    echo "Service status:"
+                    echo "Services:"
                     kubectl -n ${NAMESPACE} get svc
                 '''
             }
         }
 
-        stage('Port-Forward') {
+        stage('Health Check') {
             steps {
                 sh '''
-                    # Kill old port-forward if exists
                     pkill -f "kubectl.*port-forward" || true
                     sleep 2
                     
-                    # Start new port-forward
                     kubectl -n ${NAMESPACE} port-forward svc/fastapi-ml-svc 8000:80 --address 0.0.0.0 > /dev/null 2>&1 &
                     sleep 3
                     
-                    # Health check
-                    curl -f http://localhost:8000/api/health/heartbeat || exit 1
-                    echo "✅ Application is healthy"
+                    curl -f http://localhost:8000/api/health/heartbeat && echo "✅ Health check passed"
                 '''
             }
         }
@@ -78,10 +74,10 @@ pipeline {
 
     post {
         failure {
-            sh 'echo "❌ Pipeline failed" && kubectl -n ${NAMESPACE} logs -l app=fastapi-ml --tail=50 || true'
+            sh 'kubectl -n ${NAMESPACE} logs -l app=fastapi-ml --tail=50 || true'
         }
         success {
-            sh 'echo "✅ Pipeline completed successfully"'
+            sh 'echo "✅ Build #${BUILD_NUMBER} successful"'
         }
     }
 }
