@@ -1,0 +1,27 @@
+replicaCount: 2
+
+image:
+  repository: fastapi-ml-skeleton
+  tag: local
+  pullPolicy: IfNotPresent
+
+containerPort: 8000
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+secret:
+  name: fastapi-ml-secret
+  key: API_KEY
+
+probes:
+  path: /api/health/heartbeat
+  readinessInitialDelaySeconds: 5
+  readinessPeriodSeconds: 5
+  livenessInitialDelaySeconds: 15
+  livenessPeriodSeconds: 10
+
+env:
+  DEFAULT_MODEL_PATH: "/app/sample_model/lin_reg_california_housing_model.joblib"

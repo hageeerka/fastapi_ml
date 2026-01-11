@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: api
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.containerPort }}
+        env:
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.secret.name }}
+              key: {{ .Values.secret.key }}
+        - name: DEFAULT_MODEL_PATH
+          value: {{ .Values.env.DEFAULT_MODEL_PATH}}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.probes.path }}
+            port: {{ .Values.containerPort }}
+          initialDelaySeconds: {{ .Values.probes.readinessInitialDelaySeconds }}
+          periodSeconds: {{ .Values.probes.readinessPeriodSeconds }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.probes.path }}
+            port: {{ .Values.containerPort }}
+          initialDelaySeconds: {{ .Values.probes.livenessInitialDelaySeconds }}
+          periodSeconds: {{ .Values.probes.livenessPeriodSeconds }}
