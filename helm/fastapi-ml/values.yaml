@@ -25,3 +25,21 @@ probes:
 
 env:
   DEFAULT_MODEL_PATH: "/app/sample_model/lin_reg_california_housing_model.joblib"
+
+resources:
+  requests:
+    memory: "128Mi"     # min memory
+    cpu: "100m"         # min CPU (0.1 core)
+  limits:
+    memory: "512Mi"     # max memory
+    cpu: "500m"         # max CPU (0.5 core)
+
+# Prometheus/Grafana
+monitoring:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"

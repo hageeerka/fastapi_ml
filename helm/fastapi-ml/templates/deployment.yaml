@@ -13,12 +13,17 @@ spec:
       labels:
         app: {{ .Release.Name }}
     spec:
+      terminationGracePeriodSeconds: 30
+      
       containers:
       - name: api
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        
         ports:
-        - containerPort: {{ .Values.containerPort }}
+        - name: http
+          containerPort: {{ .Values.containerPort }}
+        
         env:
         - name: API_KEY
           valueFrom:
@@ -26,16 +31,50 @@ spec:
               name: {{ .Values.secret.name }}
               key: {{ .Values.secret.key }}
         - name: DEFAULT_MODEL_PATH
-          value: {{ .Values.env.DEFAULT_MODEL_PATH}}
+          value: {{ .Values.env.DEFAULT_MODEL_PATH | quote }}
+        
+        resources:
+          requests:
+            memory: {{ .Values.resources.requests.memory | quote }}
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+          limits:
+            memory: {{ .Values.resources.limits.memory | quote }}
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+              - ALL
+          readOnlyRootFilesystem: true
+        
         readinessProbe:
           httpGet:
             path: {{ .Values.probes.path }}
-            port: {{ .Values.containerPort }}
+            port: http
           initialDelaySeconds: {{ .Values.probes.readinessInitialDelaySeconds }}
           periodSeconds: {{ .Values.probes.readinessPeriodSeconds }}
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
         livenessProbe:
           httpGet:
             path: {{ .Values.probes.path }}
-            port: {{ .Values.containerPort }}
+            port: http
           initialDelaySeconds: {{ .Values.probes.livenessInitialDelaySeconds }}
           periodSeconds: {{ .Values.probes.livenessPeriodSeconds }}
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      
+      securityContext:
+        fsGroup: 1000
