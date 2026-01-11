@@ -1,85 +1,75 @@
-# FastAPI Model Server Skeleton
+# FastAPI ML Skeleton — DevOps Practice
 
-Serving machine learning models production-ready, fast, easy and secure powered by the great FastAPI by [Sebastián Ramírez]([)](https://github.com/tiangolo).
+Production-ready ML-сервис (прогнозирование цен на жилье) с полным DevOps pipeline.
 
-This repository contains a skeleton app which can be used to speed-up your next machine learning project. The code is fully tested and provides a preconfigured `tox` to quickly expand this sample code.
+## Стек технологий
+- **FastAPI** — REST API для ML-модели
+- **Docker** — контейнеризация
+- **Kubernetes (kind)** — оркестрация
+- **Helm** — управление развёртыванием (IaC)
+- **Prometheus + Grafana** — мониторинг
+- **GitLab CI/CD** — автоматизация сборки и деплоя
 
-To experiment and get a feeling on how to use this skeleton, a sample regression model for house price prediction is included in this project. Follow the installation and setup instructions to run the sample model and serve it aso RESTful API.
-
-## Requirements
-
+## Требования
 - Python 3.11+
 - Poetry
+- Docker
+- kubectl, Helm
+- kind или Docker Desktop Kubernetes
 
-## Installation
-Install the required packages in your local environment (ideally virtualenv, conda, etc.).
+## Быстрый старт
 
+### Локально (без контейнеров)
 ```bash
 poetry install
-``` 
-
-
-## Setup
-1. Duplicate the `.env.example` file and rename it to `.env` 
-
-
-2. In the `.env` file configure the `API_KEY` entry. The key is used for authenticating our API. <br>
-   A sample API key can be generated using Python REPL:
-
-```python
-import uuid
-print(str(uuid.uuid4()))
-```
-
-## Run It
-
-1. Start your  app with:
-
-```bash
-set -a
-source .env
-set +a
+cp .env.example .env
+# Сгенерировать API_KEY: python -c "import uuid; print(uuid.uuid4())"
 uvicorn fastapi_skeleton.main:app
-```
+# http://localhost:8000/docs
+Docker
+bash
+docker build -t fastapi-ml-skeleton:local .
+docker run --rm -p 8000:8000 --env-file .env fastapi-ml-skeleton:local
+Kubernetes + Helm (prod-like)
+bash
+# Создать кластер
+kind create cluster
+kind load docker-image fastapi-ml-skeleton:local --name kind
 
-2. Go to [http://localhost:8000/docs](http://localhost:8000/docs).
-3. Click `Authorize` and enter the API key as created in the Setup step.
-![Authroization](./docs/authorize.png) 
-4. You can use the sample payload from the `docs/sample_payload.json` file when trying out the house price prediction model using the API.
-   ![Prediction with example payload](./docs/sample_payload.png)
+# Развернуть через Helm
+kubectl create namespace leadscore
+kubectl create secret generic fastapi-ml-secret -n leadscore --from-literal=API_KEY="<key>"
+helm upgrade --install fastapi-ml ./helm/fastapi-ml -n leadscore
 
-## Linting
+# Открыть приложение
+kubectl -n leadscore port-forward svc/fastapi-ml-svc 8000:80
+# http://localhost:8000/docs
+Мониторинг
+bash
+# Установить Prometheus + Grafana
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm upgrade --install kube-prom-stack prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
 
-This skeleton code uses isort, mypy, flake, black, bandit for linting, formatting and static analysis.
+# Prometheus (http://localhost:9090)
+kubectl -n monitoring port-forward svc/kube-prom-stack-kube-prome-prometheus 9090:9090
 
-Run linting with:
+# Grafana (http://localhost:3000)
+kubectl -n monitoring port-forward svc/kube-prom-stack-grafana 3000:80
+CI/CD (GitLab)
+.gitlab-ci.yml содержит:
 
-```bash
-./scripts/linting.sh
-```
+build — сборка Docker-образа и пуш в GitLab Container Registry
 
-## Run Tests
+deploy — деплой в Kubernetes через Helm (namespace staging)
 
-Run your tests with:
+Триггер: push в main ветку.
 
-```bash
-./scripts/test.sh
-```
+Тестирование
+bash
+./scripts/linting.sh   # isort, mypy, flake8, black, bandit
+./scripts/test.sh      # pytest с покрытием
 
-This runs tests and coverage for Python 3.11 and Flake8, Autopep8, Bandit.
+Версия
+v.2.0.0 — DevOps Practice (Docker + K8s + Helm + CI/CD + Мониторинг)
 
-
-## Changelog
-
-v.1.0.0 - Initial release
-
-- Base functionality for using FastAPI to serve ML models.
-- Full test coverage 
-
-v.1.1.0 - Update to Python 3.11, FastAPI 0.108.0
-
-- Updated to Python 3.11
-- Added linting script
-- Updated to pydantic 2.x
-- Added poetry as package manager
-
+MIT
