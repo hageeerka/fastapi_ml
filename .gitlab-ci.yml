@@ -1,42 +1,87 @@
-stages:
-  - build
-  - deploy
+pipeline {
+    agent any
 
-variables:
-  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
-  DOCKER_IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
-  KUBECONFIG: /tmp/kubeconfig
+    environment {
+        DOCKER_IMAGE = "fastapi-ml-skeleton:local"
+        KUBECONFIG = "/home/jenkins/.kube/config"
+        NAMESPACE = "leadscore"
+        CHART_PATH = "./helm/fastapi-ml"
+    }
 
-build:
-  stage: build
-  image: docker:latest
-  services:
-    - docker:dind
-  script:
-    - echo "Building Docker image..."
-    - docker build -t $DOCKER_IMAGE .
-    - docker tag $DOCKER_IMAGE $DOCKER_IMAGE_LATEST
-    - echo "Logging in to GitLab Registry..."
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - echo "Pushing image to registry..."
-    - docker push $DOCKER_IMAGE
-    - docker push $DOCKER_IMAGE_LATEST
-  only:
-    - main
+    stages {
+        stage('Build') {
+            steps {
+                sh '''
+                    echo "Building Docker image..."
+                    docker build -t ${DOCKER_IMAGE} .
+                    docker images | grep fastapi
+                '''
+            }
+        }
 
-deploy:
-  stage: deploy
-  image: alpine/helm:latest
-  script:
-    - echo "Deploying to Kubernetes..."
-    - helm upgrade --install fastapi-ml ./helm/fastapi-ml 
-      -n staging 
-      --create-namespace
-      --set image.repository=$CI_REGISTRY_IMAGE
-      --set image.tag=$CI_COMMIT_SHA
-  only:
-    - main
-  environment:
-    name: staging
-    kubernetes:
-      namespace: staging
+        stage('Deploy') {
+            steps {
+                sh '''
+                    echo "Creating namespace..."
+                    kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                    
+                    echo "Creating secret..."
+                    API_KEY=$(python3 -c 'import uuid; print(uuid.uuid4())')
+                    kubectl create secret generic fastapi-ml-secret \
+                        -n ${NAMESPACE} \
+                        --from-literal=API_KEY="$API_KEY" \
+                        --dry-run=client -o yaml | kubectl apply -f -
+                    
+                    echo "Deploying with Helm..."
+                    helm upgrade --install fastapi-ml ${CHART_PATH} \
+                        -n ${NAMESPACE} \
+                        --create-namespace \
+                        --wait \
+                        --timeout 5m
+                '''
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                sh '''
+                    echo "Waiting for deployment..."
+                    kubectl -n ${NAMESPACE} rollout status deployment/fastapi-ml --timeout=5m
+                    
+                    echo "Pod status:"
+                    kubectl -n ${NAMESPACE} get pods
+                    
+                    echo "Service status:"
+                    kubectl -n ${NAMESPACE} get svc
+                '''
+            }
+        }
+
+        stage('Port-Forward') {
+            steps {
+                sh '''
+                    # Kill old port-forward if exists
+                    pkill -f "kubectl.*port-forward" || true
+                    sleep 2
+                    
+                    # Start new port-forward
+                    kubectl -n ${NAMESPACE} port-forward svc/fastapi-ml-svc 8000:80 --address 0.0.0.0 > /dev/null 2>&1 &
+                    sleep 3
+                    
+                    # Health check
+                    curl -f http://localhost:8000/api/health/heartbeat || exit 1
+                    echo "✅ Application is healthy"
+                '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            sh 'echo "❌ Pipeline failed" && kubectl -n ${NAMESPACE} logs -l app=fastapi-ml --tail=50 || true'
+        }
+        success {
+            sh 'echo "✅ Pipeline completed successfully"'
+        }
+    }
+}
