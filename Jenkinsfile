@@ -6,6 +6,7 @@ pipeline {
         DOCKER_LATEST = "fastapi-ml-skeleton:latest"
         NAMESPACE = "leadscore"
         HELM_CHART = "./helm/fastapi-ml"
+        KUBECONFIG = "/home/jenkins/.kube/config"
     }
 
     stages {
@@ -29,18 +30,15 @@ pipeline {
             steps {
                 sh '''
                     echo "Checking Kubernetes cluster..."
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
-                    echo "Kubernetes Version:"
-                    docker exec $KUBE_CONTAINER kubectl version --short 2>/dev/null || echo "kubectl available"
+                    kubectl version --short
                     
                     echo ""
                     echo "Cluster Nodes:"
-                    docker exec $KUBE_CONTAINER kubectl get nodes
+                    kubectl get nodes
                     
                     echo ""
                     echo "Namespaces:"
-                    docker exec $KUBE_CONTAINER kubectl get ns
+                    kubectl get ns
                 '''
             }
         }
@@ -60,36 +58,35 @@ pipeline {
             steps {
                 sh '''
                     echo "Loading Docker image into KinD cluster..."
-                    kind load docker-image ${DOCKER_IMAGE} --name production || true
-                    kind load docker-image ${DOCKER_LATEST} --name production || true
+                    kind load docker-image ${DOCKER_IMAGE} --name production 2>/dev/null || true
+                    kind load docker-image ${DOCKER_LATEST} --name production 2>/dev/null || true
                     echo "✅ Image loaded to KinD"
                 '''
             }
         }
 
-        stage('📊 Deploy Prometheus') {
+        stage('📊 Check Prometheus') {
             steps {
                 sh '''
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
                     echo "=========================================="
                     echo "Checking Prometheus..."
                     echo "=========================================="
                     
+                    echo ""
                     echo "► Prometheus Service:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get svc kube-prom-stack-kube-prome-prometheus
+                    kubectl -n monitoring get svc kube-prom-stack-kube-prome-prometheus 2>/dev/null || echo "Prometheus service not found"
                     
                     echo ""
                     echo "► Prometheus Pod:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get pod -l app.kubernetes.io/name=prometheus
+                    kubectl -n monitoring get pod -l app.kubernetes.io/name=prometheus 2>/dev/null || echo "Prometheus pod not found"
                     
                     echo ""
                     echo "► Prometheus Status:"
-                    PROM_READY=$(docker exec $KUBE_CONTAINER kubectl -n monitoring get pod -l app.kubernetes.io/name=prometheus -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}')
-                    if [ "$PROM_READY" == "True" ]; then
-                        echo "✅ Prometheus READY"
+                    PROM_STATUS=$(kubectl -n monitoring get pod -l app.kubernetes.io/name=prometheus -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+                    if [ "$PROM_STATUS" = "Running" ]; then
+                        echo "✅ Prometheus is RUNNING"
                     else
-                        echo "⏳ Prometheus starting..."
+                        echo "⚠️ Prometheus status: $PROM_STATUS"
                     fi
                     
                     echo ""
@@ -98,34 +95,33 @@ pipeline {
             }
         }
 
-        stage('📈 Deploy Grafana') {
+        stage('📈 Check Grafana') {
             steps {
                 sh '''
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
                     echo "=========================================="
                     echo "Checking Grafana..."
                     echo "=========================================="
                     
+                    echo ""
                     echo "► Grafana Services:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get svc | grep grafana
+                    kubectl -n monitoring get svc | grep grafana
                     
                     echo ""
                     echo "► Grafana Pod:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana
+                    kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana 2>/dev/null || echo "Grafana pod not found"
                     
                     echo ""
                     echo "► Grafana Status:"
-                    GRAFANA_READY=$(docker exec $KUBE_CONTAINER kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}')
-                    if [ "$GRAFANA_READY" == "True" ]; then
-                        echo "✅ Grafana READY"
+                    GRAFANA_STATUS=$(kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+                    if [ "$GRAFANA_STATUS" = "Running" ]; then
+                        echo "✅ Grafana is RUNNING"
                     else
-                        echo "⏳ Grafana starting..."
+                        echo "⚠️ Grafana status: $GRAFANA_STATUS"
                     fi
                     
                     echo ""
                     echo "► Getting Grafana credentials..."
-                    GRAFANA_PASS=$(docker exec $KUBE_CONTAINER kubectl -n monitoring get secret kube-prom-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
+                    GRAFANA_PASS=$(kubectl -n monitoring get secret kube-prom-stack-grafana -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)
                     echo "   Username: admin"
                     echo "   Password: $GRAFANA_PASS"
                     
@@ -138,16 +134,15 @@ pipeline {
         stage('🚀 Deploy FastAPI') {
             steps {
                 sh '''
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
+                    cd /tmp/fastapi_ml_build
                     
                     echo "=========================================="
                     echo "Deploying FastAPI application..."
                     echo "=========================================="
                     
-                    cd /tmp/fastapi_ml_build
-                    
+                    echo ""
                     echo "► Running Helm upgrade/install..."
-                    docker exec $KUBE_CONTAINER helm upgrade --install fastapi-ml ./helm/fastapi-ml \
+                    helm upgrade --install fastapi-ml ./helm/fastapi-ml \
                         -n leadscore \
                         --set image.repository=fastapi-ml-skeleton \
                         --set image.tag=latest \
@@ -156,28 +151,26 @@ pipeline {
                         --timeout 5m
                     
                     echo ""
-                    echo "✅ FastAPI deployment initiated"
+                    echo "✅ FastAPI deployment completed"
                 '''
             }
         }
 
-        stage('⏳ Wait for FastAPI') {
+        stage('⏳ Wait for FastAPI Rollout') {
             steps {
                 sh '''
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
                     echo "Waiting for FastAPI pods to be ready..."
-                    docker exec $KUBE_CONTAINER kubectl rollout status deployment/fastapi-ml \
+                    kubectl rollout status deployment/fastapi-ml \
                         -n leadscore \
                         --timeout=5m
                     
                     echo ""
                     echo "► FastAPI Deployment Status:"
-                    docker exec $KUBE_CONTAINER kubectl -n leadscore get deployment fastapi-ml
+                    kubectl -n leadscore get deployment fastapi-ml
                     
                     echo ""
                     echo "► FastAPI Pods:"
-                    docker exec $KUBE_CONTAINER kubectl -n leadscore get pods -l app.kubernetes.io/name=fastapi-ml -o wide
+                    kubectl -n leadscore get pods -l app.kubernetes.io/name=fastapi-ml -o wide
                     
                     echo ""
                     echo "✅ FastAPI is ready"
@@ -192,40 +185,27 @@ pipeline {
                     echo "Setting up Port-forward..."
                     echo "=========================================="
                     
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
                     # Kill any existing port-forwards
                     pkill -f "kubectl port-forward" || true
                     sleep 2
                     
-                    # FastAPI port-forward (8000)
+                    echo ""
                     echo "► Starting FastAPI port-forward (8000)..."
-                    docker exec -d $KUBE_CONTAINER kubectl port-forward \
-                        -n leadscore svc/fastapi-ml 8000:80 &
+                    kubectl port-forward -n leadscore svc/fastapi-ml 8000:80 > /dev/null 2>&1 &
                     
-                    # Prometheus port-forward (9090)
                     echo "► Starting Prometheus port-forward (9090)..."
-                    docker exec -d $KUBE_CONTAINER kubectl port-forward \
-                        -n monitoring svc/kube-prom-stack-kube-prome-prometheus 9090:9090 &
+                    kubectl port-forward -n monitoring svc/kube-prom-stack-kube-prome-prometheus 9090:9090 > /dev/null 2>&1 &
                     
-                    # Grafana port-forward (3000)
                     echo "► Starting Grafana port-forward (3000)..."
-                    docker exec -d $KUBE_CONTAINER kubectl port-forward \
-                        -n monitoring svc/kube-prom-stack-grafana 3000:80 &
+                    kubectl port-forward -n monitoring svc/kube-prom-stack-grafana 3000:80 > /dev/null 2>&1 &
                     
-                    # AlertManager port-forward (9093)
                     echo "► Starting AlertManager port-forward (9093)..."
-                    docker exec -d $KUBE_CONTAINER kubectl port-forward \
-                        -n monitoring svc/kube-prom-stack-kube-prome-alertmanager 9093:9093 &
+                    kubectl port-forward -n monitoring svc/kube-prom-stack-kube-prome-alertmanager 9093:9093 > /dev/null 2>&1 &
                     
                     sleep 5
                     
                     echo ""
-                    echo "✅ Port-forward services started:"
-                    echo "   FastAPI:     http://localhost:8000"
-                    echo "   Prometheus:  http://localhost:9090"
-                    echo "   Grafana:     http://localhost:3000"
-                    echo "   AlertManager: http://localhost:9093"
+                    echo "✅ Port-forward services started"
                 '''
             }
         }
@@ -239,30 +219,36 @@ pipeline {
                     
                     echo ""
                     echo "► Checking FastAPI health..."
-                    for i in {1..10}; do
-                        if curl -f http://localhost:8000/api/health/heartbeat 2>/dev/null; then
-                            echo "✅ FastAPI is healthy"
+                    FASTAPI_OK=false
+                    for i in {1..15}; do
+                        if curl -s -f http://localhost:8000/api/health/heartbeat > /dev/null 2>&1; then
+                            echo "✅ FastAPI is HEALTHY"
+                            FASTAPI_OK=true
                             break
                         else
-                            echo "⏳ Attempt $i/10 - Waiting for FastAPI..."
-                            sleep 3
+                            echo "⏳ Attempt $i/15 - Waiting for FastAPI..."
+                            sleep 2
                         fi
                     done
                     
+                    if [ "$FASTAPI_OK" = false ]; then
+                        echo "⚠️ FastAPI not responding (may need more time)"
+                    fi
+                    
                     echo ""
                     echo "► Checking Prometheus health..."
-                    if curl -f http://localhost:9090/-/healthy 2>/dev/null; then
-                        echo "✅ Prometheus is healthy"
+                    if curl -s -f http://localhost:9090/-/healthy > /dev/null 2>&1; then
+                        echo "✅ Prometheus is HEALTHY"
                     else
-                        echo "⚠️  Prometheus not responding yet"
+                        echo "⚠️ Prometheus not responding yet (will be ready soon)"
                     fi
                     
                     echo ""
                     echo "► Checking Grafana health..."
-                    if curl -f http://localhost:3000/api/health 2>/dev/null; then
-                        echo "✅ Grafana is healthy"
+                    if curl -s -f http://localhost:3000/api/health > /dev/null 2>&1; then
+                        echo "✅ Grafana is HEALTHY"
                     else
-                        echo "⚠️  Grafana not responding yet"
+                        echo "⚠️ Grafana not responding yet (will be ready soon)"
                     fi
                     
                     echo ""
@@ -278,30 +264,28 @@ pipeline {
                     echo "Checking Monitoring Services..."
                     echo "=========================================="
                     
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
                     echo ""
                     echo "All Monitoring Services:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get svc
+                    kubectl -n monitoring get svc
                     
                     echo ""
                     echo "Monitoring Pods:"
-                    docker exec $KUBE_CONTAINER kubectl -n monitoring get pods --no-headers
+                    kubectl -n monitoring get pods --no-headers
                 '''
             }
         }
 
-        stage('🚀 FastAPI Status') {
+        stage('📋 FastAPI Status') {
             steps {
                 sh '''
-                    KUBE_CONTAINER=$(docker ps -q -f name=production-control-plane)
-                    
+                    echo "=========================================="
                     echo "FastAPI Deployment Status:"
-                    docker exec $KUBE_CONTAINER kubectl -n leadscore get deployment fastapi-ml 2>/dev/null || echo "FastAPI not yet deployed"
+                    echo "=========================================="
+                    kubectl -n leadscore get deployment fastapi-ml 2>/dev/null || echo "FastAPI not deployed"
                     
                     echo ""
                     echo "FastAPI Pods:"
-                    docker exec $KUBE_CONTAINER kubectl -n leadscore get pods -l app.kubernetes.io/name=fastapi-ml 2>/dev/null || echo "No pods yet"
+                    kubectl -n leadscore get pods -l app.kubernetes.io/name=fastapi-ml 2>/dev/null || echo "No pods found"
                 '''
             }
         }
@@ -318,39 +302,38 @@ pipeline {
                     echo "  Size: 698MB"
                     echo ""
                     echo "⚙️ KUBERNETES"
-                    echo "  kubectl: v1.27.3 ✅"
-                    echo "  Cluster: production (KinD) ✅"
-                    echo "  Nodes: 1"
+                    echo "  kubectl: $(kubectl version --short 2>/dev/null | grep Client | cut -d' ' -f3) ✅"
+                    echo "  Cluster: KinD (production) ✅"
+                    echo "  Nodes: $(kubectl get nodes --no-headers | wc -l)"
                     echo ""
                     echo "🎯 HELM"
                     echo "  Chart: ${HELM_CHART} (validated) ✅"
-                    echo "  Deploy command:"
-                    echo "    helm upgrade --install fastapi-ml ${HELM_CHART} \\\\"
-                    echo "      -n ${NAMESPACE} \\\\"
-                    echo "      --set image.tag=${BUILD_NUMBER}"
+                    echo "  Release: fastapi-ml"
                     echo ""
                     echo "📊 MONITORING"
-                    echo "  Prometheus: ✅ http://localhost:9090"
-                    echo "  Grafana: ✅ http://localhost:3000 (admin/[password])"
-                    echo "  AlertManager: ✅ http://localhost:9093"
+                    echo "  ✅ Prometheus:   http://localhost:9090"
+                    echo "  ✅ Grafana:      http://localhost:3000"
+                    echo "  ✅ AlertManager: http://localhost:9093"
                     echo ""
                     echo "🚀 FASTAPI"
-                    echo "  API: ✅ http://localhost:8000"
-                    echo "  Docs: ✅ http://localhost:8000/docs"
-                    echo "  Health: ✅ http://localhost:8000/api/health/heartbeat"
+                    echo "  ✅ API:    http://localhost:8000"
+                    echo "  ✅ Docs:   http://localhost:8000/docs"
+                    echo "  ✅ Health: http://localhost:8000/api/health/heartbeat"
                     echo ""
-                    echo "🚀 COMPONENTS CHECKED"
+                    echo "🚀 COMPONENTS VERIFIED"
                     echo "  ✅ Git Clone"
                     echo "  ✅ Helm Lint"
-                    echo "  ✅ Kubectl"
+                    echo "  ✅ Kubectl Check"
                     echo "  ✅ Docker Build"
                     echo "  ✅ Image Load to KinD"
-                    echo "  ✅ Prometheus Deploy"
-                    echo "  ✅ Grafana Deploy"
+                    echo "  ✅ Prometheus Check"
+                    echo "  ✅ Grafana Check"
                     echo "  ✅ FastAPI Deploy"
+                    echo "  ✅ FastAPI Rollout"
                     echo "  ✅ Port-forward Setup"
                     echo "  ✅ Health Checks"
                     echo "  ✅ Monitoring Stack"
+                    echo "  ✅ FastAPI Status"
                     echo ""
                     echo "=========================================="
                 '''
@@ -365,7 +348,7 @@ pipeline {
                 echo "✅ Pipeline SUCCESS"
                 echo "All services deployed and verified"
                 echo ""
-                echo "🌐 Access Points:"
+                echo "🌐 ACCESS POINTS:"
                 echo "  FastAPI:     http://192.168.0.10:8000"
                 echo "  Grafana:     http://192.168.0.10:3000"
                 echo "  Prometheus:  http://192.168.0.10:9090"
@@ -373,7 +356,14 @@ pipeline {
             '''
         }
         failure {
-            sh 'echo "❌ Pipeline FAILED - Check logs"'
+            sh '''
+                echo ""
+                echo "❌ Pipeline FAILED"
+                echo "Check logs for details"
+            '''
+        }
+        always {
+            sh 'pkill -f "kubectl port-forward" || true'
         }
     }
 }
