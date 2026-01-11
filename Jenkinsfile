@@ -11,7 +11,12 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                sh 'cd /tmp && rm -rf fastapi_ml_build && git clone https://github.com/hageeerka/fastapi_ml.git fastapi_ml_build'
+                sh '''
+                    cd /tmp
+                    rm -rf fastapi_ml_build
+                    mkdir -p fastapi_ml_build
+                    git clone https://github.com/hageeerka/fastapi_ml.git fastapi_ml_build
+                '''
             }
         }
 
